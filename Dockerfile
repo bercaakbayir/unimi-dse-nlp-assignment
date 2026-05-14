@@ -16,5 +16,3 @@ RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/wh
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY src/ ./src/
-
-ENTRYPOINT ["python", "src/data/build_hotpotqa_db.py"]

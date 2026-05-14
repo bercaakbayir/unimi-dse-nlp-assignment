@@ -1,12 +1,29 @@
 services:
+
+  # ── Build vector index ──────────────────────────────────────────────────────
   build-hotpotqa-db:
     build:
       context: .
       dockerfile: Dockerfile
     volumes:
-      # Bind-mount ./data so downloaded dataset and ChromaDB persist on the host
       - ./data:/app/data
     environment:
-      # Cache HuggingFace models inside the mounted volume so they survive container restarts
       - HF_HOME=/app/data/.cache/huggingface
       - TRANSFORMERS_CACHE=/app/data/.cache/transformers
+    command: ["python", "src/data/build_hotpotqa_db.py"]
+
+  # ── RAG Q&A ─────────────────────────────────────────────────────────────────
+  qa:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      - ./data:/app/data
+    environment:
+      - HF_HOME=/app/data/.cache/huggingface
+      - TRANSFORMERS_CACHE=/app/data/.cache/transformers
+      # Reach the Ollama server running on the host machine
+      - OLLAMA_HOST=http://host.docker.internal:11434
+    stdin_open: true
+    tty: true
+    command: ["python", "src/rag/qa.py"]

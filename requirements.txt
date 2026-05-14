@@ -3,3 +3,4 @@ sentence-transformers>=2.7.0
 chromadb>=0.5.0
 tqdm>=4.66.0
 torch
+ollama>=0.3.0
