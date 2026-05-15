@@ -53,8 +53,8 @@ def parse_args() -> argparse.Namespace:
         help="Retrieval strategy: dense (ChromaDB only) or hybrid (BM25+dense, default: hybrid)",
     )
     parser.add_argument(
-        "--no-multi-query", action="store_true",
-        help="Disable multi-query decomposition (faster, lower quality on multi-hop questions)",
+        "--multi-query", action="store_true",
+        help="Enable LLM query decomposition (requires a capable model, e.g. llama3.2:3b or larger)",
     )
     parser.add_argument(
         "--question", "-q", default=None,
@@ -89,7 +89,7 @@ def build_pipeline(args: argparse.Namespace) -> RAGPipeline:
         retriever=retriever,
         llm=llm,
         top_k=args.top_k,
-        use_multi_query=not args.no_multi_query,
+        use_multi_query=args.multi_query,
     )
 
 

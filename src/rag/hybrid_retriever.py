@@ -28,14 +28,10 @@ def _load_bm25(bm25_path: str, corpus_ids_path: str) -> tuple[BM25Plus, list[str
     return _BM25_CACHE[bm25_path], corpus["ids"], corpus["titles"]
 
 
-def _rrf_score(rank: int, k: int = 60) -> float:
-    return 1.0 / (k + rank)
-
-
 class HybridRetriever:
     """
     Retriever combining dense (ChromaDB cosine) and sparse (BM25Plus) search
-    via Reciprocal Rank Fusion.
+    with a BM25-first hybrid fusion strategy.
     """
 
     def __init__(
@@ -46,10 +42,8 @@ class HybridRetriever:
         top_k: int = 10,
         bm25_path: Path | str | None = None,
         corpus_ids_path: Path | str | None = None,
-        rrf_k: int = 60,
     ) -> None:
         self.top_k = top_k
-        self._rrf_k = rrf_k
 
         if torch.backends.mps.is_available():
             device = "mps"
@@ -143,28 +137,35 @@ class HybridRetriever:
     def _fuse(
         self, dense: list[dict], sparse: list[dict], k: int
     ) -> list[dict]:
-        rrf_scores: dict[str, float] = {}
-        docs: dict[str, dict] = {}
-        # Keep cosine sim from dense results so display scores stay interpretable
-        dense_sim: dict[str, float] = {}
+        # BM25-first hybrid: guarantee top ceil(k/2) BM25 results always appear.
+        # RRF fails for named entities because a high-BM25 / low-dense document
+        # (e.g. the exact Wikipedia article for a rare name) loses to many
+        # moderate-scoring documents that appear in both lists.
+        dense_sim: dict[str, float] = {p["id"]: p["score"] for p in dense}
+        seen_ids: set[str] = set()
+        final: list[dict] = []
 
-        for rank, p in enumerate(dense, start=1):
+        # Phase 1: guaranteed BM25 quota
+        bm25_quota = (k + 1) // 2
+        for p in sparse:
+            if len(final) >= bm25_quota:
+                break
             pid = p["id"]
-            rrf_scores[pid] = rrf_scores.get(pid, 0.0) + _rrf_score(rank, self._rrf_k)
-            docs[pid] = p
-            dense_sim[pid] = p["score"]
+            if pid not in seen_ids:
+                seen_ids.add(pid)
+                entry = dict(p)
+                # Show cosine sim when available; 0.5 placeholder for BM25-only hits
+                entry["score"] = dense_sim.get(pid, 0.5)
+                final.append(entry)
 
-        for rank, p in enumerate(sparse, start=1):
+        # Phase 2: fill remaining slots from dense
+        for p in dense:
+            if len(final) >= k:
+                break
             pid = p["id"]
-            rrf_scores[pid] = rrf_scores.get(pid, 0.0) + _rrf_score(rank, self._rrf_k)
-            if pid not in docs:
-                docs[pid] = p
+            if pid not in seen_ids:
+                seen_ids.add(pid)
+                final.append(dict(p))
 
-        ranked = sorted(rrf_scores.items(), key=lambda x: x[1], reverse=True)
-        results = []
-        for i, (pid, rrf) in enumerate(ranked[:k]):
-            entry = dict(docs[pid])
-            # Display cosine similarity when available; rank-based fallback for BM25-only hits
-            entry["score"] = dense_sim.get(pid, round(1.0 - (i + 1) / (k + 2), 4))
-            results.append(entry)
-        return results
+        final.sort(key=lambda x: x["score"], reverse=True)
+        return final

@@ -4,9 +4,9 @@ from .retriever import ChromaDBRetriever
 _SYSTEM_PROMPT = """\
 You are a precise question-answering assistant.
 Answer the question using ONLY the provided context passages.
-When the answer requires combining facts from multiple passages, do so explicitly.
+When the question compares two entities, first state the relevant fact about each entity from the context, then give your conclusion.
 If the answer cannot be determined from the context, say: "I cannot find the answer in the provided context."
-Keep your answer concise and factual — do not add information beyond what the context contains.\
+Keep your answer factual — do not add information beyond what the context contains.\
 """
 
 _DECOMPOSE_SYSTEM = """\
@@ -24,7 +24,7 @@ class RAGPipeline:
         retriever: ChromaDBRetriever,
         llm: OllamaLLM,
         top_k: int = 10,
-        use_multi_query: bool = True,
+        use_multi_query: bool = False,
     ) -> None:
         self.retriever = retriever
         self.llm = llm
@@ -59,24 +59,48 @@ class RAGPipeline:
 
     def _retrieve_multi_query(self, question: str, k: int) -> list[dict]:
         sub_queries = self._decompose(question)
-        # Always include the original question so decomposition failures don't lose coverage
         if question not in sub_queries:
             sub_queries = [question] + sub_queries
-        per_query_k = max(k, k // len(sub_queries) + 2)
+        per_query_k = k * 2  # wider net per sub-query
+
+        all_results = [self.retriever.retrieve(sq, k=per_query_k) for sq in sub_queries]
+
+        # Round-robin merge: take one unique result from each sub-query per round.
+        # This guarantees the top-ranked article for each sub-query (e.g. each named entity)
+        # always makes it into the final context, regardless of absolute score differences.
         seen_ids: set[str] = set()
-        merged: list[dict] = []
-        for sq in sub_queries:
-            for p in self.retriever.retrieve(sq, k=per_query_k):
-                pid = p.get("id") or f"{p['title']}::{p['text'][:40]}"
-                if pid not in seen_ids:
-                    seen_ids.add(pid)
-                    merged.append(p)
-        merged.sort(key=lambda x: x["score"], reverse=True)
-        return merged[:k]
+        final: list[dict] = []
+        pointers = [0] * len(all_results)
+
+        while len(final) < k:
+            added_this_round = 0
+            for i, results in enumerate(all_results):
+                if len(final) >= k:
+                    break
+                while pointers[i] < len(results):
+                    p = results[pointers[i]]
+                    pointers[i] += 1
+                    pid = p.get("id") or f"{p['title']}::{p['text'][:40]}"
+                    if pid not in seen_ids:
+                        seen_ids.add(pid)
+                        final.append(p)
+                        added_this_round += 1
+                        break
+            if added_this_round == 0:
+                break
+
+        # Sort for display — LLM sees all k passages regardless of display order
+        final.sort(key=lambda x: x["score"], reverse=True)
+        return final[:k]
 
     def _build_prompt(self, question: str, passages: list[dict]) -> str:
         context = "\n\n".join(
             f"[{i}] {p['title']}\n{p['text']}"
             for i, p in enumerate(passages, 1)
         )
-        return f"Context:\n{context}\n\nQuestion: {question}\nAnswer:"
+        return (
+            f"Context:\n{context}\n\n"
+            f"Question: {question}\n"
+            f"Think step by step using only the context above, then give a concise answer.\n"
+            f"Answer:"
+        )
