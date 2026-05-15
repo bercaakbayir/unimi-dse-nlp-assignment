@@ -8,6 +8,15 @@ from sentence_transformers import SentenceTransformer
 logging.getLogger("sentence_transformers").setLevel(logging.ERROR)
 logging.getLogger("transformers").setLevel(logging.ERROR)
 
+_MODEL_CACHE: dict[str, SentenceTransformer] = {}
+
+
+def _get_model(model_name: str, device: str) -> SentenceTransformer:
+    key = f"{model_name}::{device}"
+    if key not in _MODEL_CACHE:
+        _MODEL_CACHE[key] = SentenceTransformer(model_name, device=device)
+    return _MODEL_CACHE[key]
+
 
 class ChromaDBRetriever:
     """
@@ -33,7 +42,7 @@ class ChromaDBRetriever:
         else:
             device = "cpu"
 
-        self._model = SentenceTransformer(model_name, device=device)
+        self._model = _get_model(model_name, device)
 
         client = chromadb.PersistentClient(path=str(chroma_dir))
         self._collection = client.get_collection(name=collection_name)
@@ -59,12 +68,14 @@ class ChromaDBRetriever:
         )
 
         passages = []
-        for doc, meta, dist in zip(
+        for doc_id, doc, meta, dist in zip(
+            results["ids"][0],
             results["documents"][0],
             results["metadatas"][0],
             results["distances"][0],
         ):
             passages.append({
+                "id":       doc_id,
                 "text":     doc,
                 "title":    meta["title"],
                 "score":    round(1.0 - dist, 4),  # cosine distance → similarity

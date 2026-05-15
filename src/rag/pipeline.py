@@ -9,44 +9,36 @@ If the answer cannot be determined from the context, say: "I cannot find the ans
 Keep your answer concise and factual — do not add information beyond what the context contains.\
 """
 
+_DECOMPOSE_SYSTEM = """\
+You are a query decomposition assistant.
+Given a complex question, output 2-3 simple factual sub-questions that together answer it.
+Output ONLY the sub-questions, one per line, no numbering, no preamble.\
+"""
+
+_DECOMPOSE_TMPL = "Question: {question}\nSub-questions:"
+
 
 class RAGPipeline:
-    """
-    Retrieval-Augmented Generation pipeline.
-
-    Composes a ChromaDBRetriever and an OllamaLLM:
-      1. Retrieve the top-k passages most similar to the question.
-      2. Build a context-grounded prompt.
-      3. Generate an answer with the LLM.
-
-    Usage:
-        pipeline = RAGPipeline(retriever, llm, top_k=5)
-        result   = pipeline.answer("Who was the first person on the moon?")
-        print(result["answer"])
-        print(result["sources"])
-    """
-
     def __init__(
         self,
         retriever: ChromaDBRetriever,
         llm: OllamaLLM,
-        top_k: int = 5,
+        top_k: int = 10,
+        use_multi_query: bool = True,
     ) -> None:
         self.retriever = retriever
         self.llm = llm
         self.top_k = top_k
+        self.use_multi_query = use_multi_query
 
     def answer(self, question: str, k: int | None = None) -> dict:
-        """
-        Returns a dict with:
-          - question : the original question
-          - answer   : the LLM-generated answer
-          - sources  : list of {title, text, score} for the retrieved passages
-        """
-        passages = self.retriever.retrieve(question, k=k or self.top_k)
-        prompt   = self._build_prompt(question, passages)
-        answer   = self.llm.generate(prompt, system=_SYSTEM_PROMPT)
-
+        k = k or self.top_k
+        if self.use_multi_query:
+            passages = self._retrieve_multi_query(question, k)
+        else:
+            passages = self.retriever.retrieve(question, k=k)
+        prompt = self._build_prompt(question, passages)
+        answer = self.llm.generate(prompt, system=_SYSTEM_PROMPT)
         return {
             "question": question,
             "answer":   answer,
@@ -55,6 +47,29 @@ class RAGPipeline:
                 for p in passages
             ],
         }
+
+    def _decompose(self, question: str) -> list[str]:
+        prompt = _DECOMPOSE_TMPL.format(question=question)
+        raw = self.llm.generate(prompt, system=_DECOMPOSE_SYSTEM)
+        lines = [l.strip() for l in raw.strip().splitlines() if l.strip()]
+        sub_queries = [l for l in lines if "?" in l]
+        if not sub_queries or len(sub_queries) > 4:
+            return [question]
+        return sub_queries
+
+    def _retrieve_multi_query(self, question: str, k: int) -> list[dict]:
+        sub_queries = self._decompose(question)
+        per_query_k = max(k, k // len(sub_queries) + 2)
+        seen_ids: set[str] = set()
+        merged: list[dict] = []
+        for sq in sub_queries:
+            for p in self.retriever.retrieve(sq, k=per_query_k):
+                pid = p.get("id") or f"{p['title']}::{p['text'][:40]}"
+                if pid not in seen_ids:
+                    seen_ids.add(pid)
+                    merged.append(p)
+        merged.sort(key=lambda x: x["score"], reverse=True)
+        return merged[:k]
 
     def _build_prompt(self, question: str, passages: list[dict]) -> str:
         context = "\n\n".join(
