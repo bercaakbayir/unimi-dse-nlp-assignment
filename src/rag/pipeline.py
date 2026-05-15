@@ -53,36 +53,49 @@ class RAGPipeline:
         llm: OllamaLLM,
         top_k: int = 10,
         use_multi_query: bool = False,
+        poisoner=None,
     ) -> None:
         self.retriever = retriever
         self.llm = llm
         self.top_k = top_k
         self.use_multi_query = use_multi_query
+        self.poisoner = poisoner
 
-    def answer(self, question: str, k: int | None = None) -> dict:
-        k = k or self.top_k
+    def _retrieve(self, question: str, k: int) -> list[dict]:
         if self.use_multi_query:
             passages = self._retrieve_multi_query(question, k)
         else:
             passages = self.retriever.retrieve(question, k=k)
+        if self.poisoner:
+            passages = self.poisoner.poison(passages, question)
+        return passages
+
+    def _make_sources(self, passages: list[dict]) -> list[dict]:
+        return [
+            {
+                "title":    p["title"],
+                "text":     p["text"],
+                "score":    p["score"],
+                "poisoned": p.get("poisoned", False),
+            }
+            for p in passages
+        ]
+
+    def answer(self, question: str, k: int | None = None) -> dict:
+        k = k or self.top_k
+        passages = self._retrieve(question, k)
         prompt = self._build_prompt(question, passages)
         answer = self.llm.generate(prompt, system=_SYSTEM_PROMPT)
         return {
             "question": question,
             "answer":   answer,
-            "sources":  [
-                {"title": p["title"], "text": p["text"], "score": p["score"]}
-                for p in passages
-            ],
+            "sources":  self._make_sources(passages),
         }
 
     def answer_stream(self, question: str, k: int | None = None) -> Iterator[tuple]:
         """Yield ('token', str) for each LLM token, then ('done', result_dict) when complete."""
         k = k or self.top_k
-        if self.use_multi_query:
-            passages = self._retrieve_multi_query(question, k)
-        else:
-            passages = self.retriever.retrieve(question, k=k)
+        passages = self._retrieve(question, k)
 
         prompt = self._build_prompt(question, passages)
         full_answer = ""
@@ -94,10 +107,7 @@ class RAGPipeline:
         yield "done", {
             "question": question,
             "answer":   full_answer,
-            "sources":  [
-                {"title": p["title"], "text": p["text"], "score": p["score"]}
-                for p in passages
-            ],
+            "sources":  self._make_sources(passages),
         }
 
     def _decompose(self, question: str) -> list[str]:

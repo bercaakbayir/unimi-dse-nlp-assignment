@@ -67,6 +67,14 @@ def parse_args() -> argparse.Namespace:
         "--question", "-q", default=None,
         help="Single question — skips interactive loop",
     )
+    parser.add_argument(
+        "--poison", type=lambda x: x.lower() == "true", default=False,
+        help="Inject false facts into retrieved passages (default: false)",
+    )
+    parser.add_argument(
+        "--poison-seed", type=int, default=None,
+        help="Random seed for poison passage selection (default: non-deterministic)",
+    )
     return parser.parse_args()
 
 
@@ -92,11 +100,16 @@ def build_pipeline(args: argparse.Namespace) -> RAGPipeline:
             top_k=args.top_k,
         )
     llm = OllamaLLM(model=args.llm)
+    poisoner = None
+    if args.poison:
+        from src.rag.poisoner import PassagePoisoner
+        poisoner = PassagePoisoner(llm=llm, rate=0.3, seed=args.poison_seed)
     pipeline = RAGPipeline(
         retriever=retriever,
         llm=llm,
         top_k=args.top_k,
         use_multi_query=args.multi_query,
+        poisoner=poisoner,
     )
     _console.print("[dim]Warming up model…[/dim]", end="\r")
     pipeline.llm.generate("hi")
@@ -124,7 +137,11 @@ def print_result_stream(pipeline: RAGPipeline, question: str) -> None:
     sources = Text()
     for s in full_result["sources"]:
         sources.append(f"[{s['score']:.3f}] ", style="bold")
-        sources.append(f"{s['title']}\n", style="bold")
+        if s.get("poisoned"):
+            sources.append(f"{s['title']} ", style="bold")
+            sources.append("[POISONED]\n", style="bold red")
+        else:
+            sources.append(f"{s['title']}\n", style="bold")
         sources.append(f"  {s['text'][:120].strip()}...\n\n")
     _console.print(Panel(sources, title="Retrieved Documents",
                          border_style="dark_orange", box=rich_box.ROUNDED))

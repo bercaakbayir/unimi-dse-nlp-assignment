@@ -114,6 +114,9 @@ def print_summary(records: list[dict], n_total: int) -> None:
             f" {_avg(comparison, key):>11.1f}%"
         )
     print("─" * 50)
+    if any(r.get("poisoning_enabled") for r in evaluated):
+        avg_poisoned = sum(r.get("poisoned_count", 0) for r in evaluated) / len(evaluated) if evaluated else 0
+        print(f"  Poisoning enabled — avg {avg_poisoned:.1f} passages poisoned per question")
     errors = [r for r in records if r.get("error")]
     if errors:
         print(f"  Errors / skipped: {len(errors)}")
@@ -161,7 +164,11 @@ def build_pipeline(args: argparse.Namespace) -> RAGPipeline:
             top_k=args.top_k,
         )
     llm = OllamaLLM(model=args.llm)
-    return RAGPipeline(retriever=retriever, llm=llm, top_k=args.top_k)
+    poisoner = None
+    if args.poison:
+        from src.rag.poisoner import PassagePoisoner
+        poisoner = PassagePoisoner(llm=llm, rate=0.3, seed=args.poison_seed)
+    return RAGPipeline(retriever=retriever, llm=llm, top_k=args.top_k, poisoner=poisoner)
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -182,6 +189,10 @@ def parse_args() -> argparse.Namespace:
                         help="Sentence-transformers model name")
     parser.add_argument("--collection", default="hotpotqa_passages",
                         help="ChromaDB collection name")
+    parser.add_argument("--poison", type=lambda x: x.lower() == "true", default=False,
+                        help="Inject false facts into retrieved passages (default: false)")
+    parser.add_argument("--poison-seed", type=int, default=None,
+                        help="Random seed for poison passage selection (default: non-deterministic)")
     return parser.parse_args()
 
 
@@ -257,6 +268,9 @@ def main() -> None:
                     "sp_f1":             sp_f,
                     "retrieved_titles":  ret_titles,
                     "gold_titles":       gold_titles,
+                    "poisoning_enabled": args.poison,
+                    "poisoned_count":    sum(1 for s in result["sources"] if s.get("poisoned")),
+                    "poisoned_titles":   [s["title"] for s in result["sources"] if s.get("poisoned")],
                     "error":             None,
                 })
             except Exception as e:
