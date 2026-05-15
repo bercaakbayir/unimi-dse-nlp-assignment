@@ -72,7 +72,7 @@ def parse_args() -> argparse.Namespace:
 
 def build_pipeline(args: argparse.Namespace) -> RAGPipeline:
     if args.retriever == "hybrid" and BM25_PATH.exists():
-        from src.rag.hybrid_retriever import HybridRetriever
+        from src.rag.retriever import HybridRetriever
         retriever = HybridRetriever(
             chroma_dir=CHROMA_DIR,
             collection_name=args.collection,
