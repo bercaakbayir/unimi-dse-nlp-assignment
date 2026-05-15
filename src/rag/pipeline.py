@@ -1,3 +1,5 @@
+from typing import Iterator
+
 from .llm import OllamaLLM
 from .retriever import ChromaDBRetriever
 
@@ -42,6 +44,30 @@ class RAGPipeline:
         return {
             "question": question,
             "answer":   answer,
+            "sources":  [
+                {"title": p["title"], "text": p["text"], "score": p["score"]}
+                for p in passages
+            ],
+        }
+
+    def answer_stream(self, question: str, k: int | None = None) -> Iterator[tuple]:
+        """Yield ('token', str) for each LLM token, then ('done', result_dict) when complete."""
+        k = k or self.top_k
+        if self.use_multi_query:
+            passages = self._retrieve_multi_query(question, k)
+        else:
+            passages = self.retriever.retrieve(question, k=k)
+
+        prompt = self._build_prompt(question, passages)
+        full_answer = ""
+
+        for token in self.llm.generate_stream(prompt, system=_SYSTEM_PROMPT):
+            full_answer += token
+            yield "token", token
+
+        yield "done", {
+            "question": question,
+            "answer":   full_answer,
             "sources":  [
                 {"title": p["title"], "text": p["text"], "score": p["score"]}
                 for p in passages

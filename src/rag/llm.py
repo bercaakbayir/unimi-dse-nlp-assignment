@@ -1,4 +1,5 @@
 import os
+from typing import Iterator
 
 import ollama
 
@@ -35,3 +36,18 @@ class OllamaLLM:
             options={"temperature": self.temperature},
         )
         return response["message"]["content"].strip()
+
+    def generate_stream(self, prompt: str, system: str | None = None) -> Iterator[str]:
+        """Yield response tokens one at a time as the model generates them."""
+        messages = []
+        if system:
+            messages.append({"role": "system", "content": system})
+        messages.append({"role": "user", "content": prompt})
+
+        for chunk in self._client.chat(
+            model=self.model,
+            messages=messages,
+            options={"temperature": self.temperature},
+            stream=True,
+        ):
+            yield chunk["message"]["content"]

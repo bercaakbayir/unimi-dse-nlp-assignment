@@ -92,12 +92,47 @@ def build_pipeline(args: argparse.Namespace) -> RAGPipeline:
             top_k=args.top_k,
         )
     llm = OllamaLLM(model=args.llm)
-    return RAGPipeline(
+    pipeline = RAGPipeline(
         retriever=retriever,
         llm=llm,
         top_k=args.top_k,
         use_multi_query=args.multi_query,
     )
+    _console.print("[dim]Warming up model…[/dim]", end="\r")
+    pipeline.llm.generate("hi")
+    _console.print(" " * 30, end="\r")
+    return pipeline
+
+
+def print_result_stream(pipeline: RAGPipeline, question: str) -> None:
+    _console.rule("[yellow]Chain-of-Thought[/yellow]", style="yellow")
+
+    full_result = None
+    for event, content in pipeline.answer_stream(question):
+        if event == "token":
+            print(content, end="", flush=True)
+        else:
+            full_result = content
+    print()
+    _console.rule(style="yellow")
+
+    if full_result is None:
+        return
+
+    full_answer = full_result["answer"]
+
+    sources = Text()
+    for s in full_result["sources"]:
+        sources.append(f"[{s['score']:.3f}] ", style="bold")
+        sources.append(f"{s['title']}\n", style="bold")
+        sources.append(f"  {s['text'][:120].strip()}...\n\n")
+    _console.print(Panel(sources, title="Retrieved Documents",
+                         border_style="dark_orange", box=rich_box.ROUNDED))
+
+    if "Final Answer:" in full_answer:
+        final = full_answer.split("Final Answer:", 1)[1].strip()
+        _console.print(Panel(Text(final, style="bold"), title="Final Answer",
+                             border_style="blue", box=rich_box.ROUNDED))
 
 
 def print_result(result: dict) -> None:
@@ -133,7 +168,7 @@ def main() -> None:
     pipeline = build_pipeline(args)
 
     if args.question:
-        print_result(pipeline.answer(args.question))
+        print_result_stream(pipeline, args.question)
         return
 
     print("RAG Q&A — HotpotQA  |  type 'quit' to exit\n")
@@ -146,7 +181,7 @@ def main() -> None:
             continue
         if question.lower() in ("quit", "exit", "q"):
             break
-        print_result(pipeline.answer(question))
+        print_result_stream(pipeline, question)
 
 
 if __name__ == "__main__":
