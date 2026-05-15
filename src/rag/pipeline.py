@@ -101,6 +101,7 @@ class RAGPipeline:
         return (
             f"Context:\n{context}\n\n"
             f"Question: {question}\n"
-            f"Think step by step using only the context above, then give a concise answer.\n"
+            f"Think step by step using only the context above. "
+            f"After your reasoning, end with 'Final Answer:' followed by a short answer (1-3 words, matching HotpotQA format).\n"
             f"Answer:"
         )

@@ -7,6 +7,10 @@ from sentence_transformers import SentenceTransformer
 
 logging.getLogger("sentence_transformers").setLevel(logging.ERROR)
 logging.getLogger("transformers").setLevel(logging.ERROR)
+logging.getLogger("huggingface_hub").setLevel(logging.ERROR)  # suppresses unauthenticated-token warning
+
+import os
+os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")   # suppresses "Loading weights" bar
 
 _MODEL_CACHE: dict[str, SentenceTransformer] = {}
 
