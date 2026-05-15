@@ -41,8 +41,8 @@ def parse_args() -> argparse.Namespace:
         help="Sentence-transformers model used at index time",
     )
     parser.add_argument(
-        "--llm", default="llama3.2:1b",
-        help="Ollama model name (default: llama3.2:1b)",
+        "--llm", default="llama3.2:3b",
+        help="Ollama model name (default: llama3.2:3b)",
     )
     parser.add_argument(
         "--top-k", type=int, default=10,
