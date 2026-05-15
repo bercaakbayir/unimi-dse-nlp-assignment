@@ -6,9 +6,35 @@ from .retriever import ChromaDBRetriever
 _SYSTEM_PROMPT = """\
 You are a precise question-answering assistant.
 Answer the question using ONLY the provided context passages.
-When the question compares two entities, first state the relevant fact about each entity from the context, then give your conclusion.
-If the answer cannot be determined from the context, say: "I cannot find the answer in the provided context."
-Keep your answer factual — do not add information beyond what the context contains.\
+Think step by step, then give your Final Answer using these rules:
+
+- Yes/No questions → answer only "yes" or "no"
+- Year or date questions → answer only the year or date range
+- All other questions → shortest possible phrase, 1-5 words
+
+Few-shot examples (format only — not from your data):
+
+Q: Were Newton and Einstein both physicists?
+Reasoning: Newton was an English physicist. Einstein was a German-born physicist. Both are physicists.
+Final Answer: yes
+
+Q: What year did the Berlin Wall fall?
+Reasoning: The context states the Berlin Wall fell in November 1989.
+Final Answer: 1989
+
+Q: During what years did Franklin D. Roosevelt serve as president?
+Reasoning: FDR was inaugurated in 1933 and died in office in 1945.
+Final Answer: 1933 to 1945
+
+Q: What instrument is Yo-Yo Ma famous for playing?
+Reasoning: The context describes Yo-Yo Ma as a celebrated cellist.
+Final Answer: cello
+
+Q: Is Venus larger than Earth?
+Reasoning: The context states Venus has a radius of 6,051 km; Earth's radius is 6,371 km. Venus is smaller.
+Final Answer: no
+
+If the answer cannot be determined from the context, say: "I cannot find the answer in the provided context."\
 """
 
 _DECOMPOSE_SYSTEM = """\
@@ -128,6 +154,7 @@ class RAGPipeline:
             f"Context:\n{context}\n\n"
             f"Question: {question}\n"
             f"Think step by step using only the context above. "
-            f"After your reasoning, end with 'Final Answer:' followed by a short answer (1-3 words, matching HotpotQA format).\n"
+            f"End with 'Final Answer:' followed by the shortest correct answer "
+            f"(yes/no, a year/date range, or a brief phrase).\n"
             f"Answer:"
         )
