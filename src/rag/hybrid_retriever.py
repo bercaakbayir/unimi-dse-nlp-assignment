@@ -75,7 +75,7 @@ class HybridRetriever:
 
     def retrieve(self, query: str, k: int | None = None) -> list[dict]:
         k = k or self.top_k
-        candidates = k * 3
+        candidates = k * 5
 
         dense_results = self._dense_retrieve(query, candidates)
         if not self._bm25_available:
@@ -145,11 +145,14 @@ class HybridRetriever:
     ) -> list[dict]:
         rrf_scores: dict[str, float] = {}
         docs: dict[str, dict] = {}
+        # Keep cosine sim from dense results so display scores stay interpretable
+        dense_sim: dict[str, float] = {}
 
         for rank, p in enumerate(dense, start=1):
             pid = p["id"]
             rrf_scores[pid] = rrf_scores.get(pid, 0.0) + _rrf_score(rank, self._rrf_k)
             docs[pid] = p
+            dense_sim[pid] = p["score"]
 
         for rank, p in enumerate(sparse, start=1):
             pid = p["id"]
@@ -159,8 +162,9 @@ class HybridRetriever:
 
         ranked = sorted(rrf_scores.items(), key=lambda x: x[1], reverse=True)
         results = []
-        for pid, score in ranked[:k]:
+        for i, (pid, rrf) in enumerate(ranked[:k]):
             entry = dict(docs[pid])
-            entry["score"] = round(score, 6)
+            # Display cosine similarity when available; rank-based fallback for BM25-only hits
+            entry["score"] = dense_sim.get(pid, round(1.0 - (i + 1) / (k + 2), 4))
             results.append(entry)
         return results

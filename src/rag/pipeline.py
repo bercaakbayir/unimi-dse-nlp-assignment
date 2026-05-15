@@ -59,6 +59,9 @@ class RAGPipeline:
 
     def _retrieve_multi_query(self, question: str, k: int) -> list[dict]:
         sub_queries = self._decompose(question)
+        # Always include the original question so decomposition failures don't lose coverage
+        if question not in sub_queries:
+            sub_queries = [question] + sub_queries
         per_query_k = max(k, k // len(sub_queries) + 2)
         seen_ids: set[str] = set()
         merged: list[dict] = []
