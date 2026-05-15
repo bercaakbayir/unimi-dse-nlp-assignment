@@ -64,13 +64,12 @@ Reads all chunks from ChromaDB in batches of 10,000, tokenises each chunk with a
 alphanumeric regex, builds a **BM25Plus** index, and pickles it alongside a corpus ID mapping to
 `data/bm25_index.pkl` and `data/bm25_corpus_ids.pkl`.
 
-### `src/rag/retriever.py` — Dense retriever
-Encodes the query with the same `all-MiniLM-L12-v2` model (singleton-cached per process),
-queries ChromaDB for the nearest neighbours by cosine similarity, and returns passages with
-their titles, text, and similarity scores.
-
-### `src/rag/hybrid_retriever.py` — Hybrid retriever
-Combines dense and BM25 search with a **BM25-first fusion strategy**:
+### `src/rag/retriever.py` — Dense + Hybrid retriever
+Contains both `ChromaDBRetriever` (dense-only) and `HybridRetriever` (BM25 + dense) in a single
+file. `ChromaDBRetriever` encodes the query with `all-MiniLM-L12-v2` (singleton-cached per
+process), queries ChromaDB for the nearest neighbours by cosine similarity, and returns passages
+with their titles, text, and similarity scores. `HybridRetriever` extends this with a
+**BM25-first fusion strategy**:
 
 1. Run dense retrieval for top-50 candidates and BM25 retrieval for top-50 candidates.
 2. **Phase 1 — BM25 quota**: guarantee the top `ceil(k/2)` BM25 results always appear in the
@@ -107,6 +106,16 @@ Orchestrates retrieval and generation:
 Thin wrapper around `ollama.Client`. Supports both blocking (`generate`) and streaming
 (`generate_stream`) modes. Connects to `http://localhost:11434` by default; override with
 `OLLAMA_HOST` env var (used in Docker).
+
+### `src/eval/evaluate.py` — Benchmark evaluation
+Runs the full pipeline over the HotpotQA validation set and computes standard metrics:
+
+- **Exact Match (EM)** — predicted Final Answer matches gold after normalization (lowercase, strip articles/punctuation)
+- **Token F1** — token-level overlap between prediction and gold
+- **SP Precision / Recall / F1** — whether retrieved passage titles cover the gold supporting-fact articles
+
+Results are written to a JSONL file (one record per question, appended live for resume support)
+and a timestamped CSV (`results/eval_YYYYMMDD_HHMMSS.csv`) with columns `id, question, real_answer, llm_answer`.
 
 ### `src/rag/qa.py` — CLI interface
 Entry point for interactive and single-question modes. Renders output with `rich`:
@@ -335,6 +344,49 @@ Final Answer: no
 
 ---
 
+## Evaluation
+
+### Running the benchmark
+
+```bash
+# Quick test: 100 random questions (seed 42 for reproducibility)
+python src/eval/evaluate.py --limit 100 --output results/smoke.jsonl
+
+# Full validation set (7,405 questions — long run)
+python src/eval/evaluate.py --output results/hybrid_k10.jsonl
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `--limit` | all 7,405 | Randomly sample N questions |
+| `--seed` | `42` | Random seed — same seed produces the same subset every run |
+| `--output` | `results/eval.jsonl` | Per-question JSONL (resume-safe, appended live) |
+| `--top-k` | `10` | Number of passages to retrieve |
+| `--llm` | `llama3.2:3b` | Ollama model name |
+
+### Results — 100 questions (hybrid retriever, top-10, llama3.2:3b)
+
+```
+────────────────────────────────────────────────────────────
+  Evaluation Summary  |  Questions evaluated: 100/100
+────────────────────────────────────────────────────────────
+Metric                  All     Bridge   Comparison
+──────────────────────────────────────────────────
+Exact Match (EM)      26.0%      24.4%        35.7%
+Token F1              37.5%      37.1%        40.5%
+SP Precision          17.4%      17.2%        18.3%
+SP Recall             76.0%      75.0%        82.1%
+SP F1                 28.2%      27.9%        29.8%
+──────────────────────────────────────────────────
+```
+
+**Interpretation:**
+- **EM 26% / F1 37.5%** — reasonable for a 3B parameter local model on hard multi-hop questions. Comparison questions (yes/no) are easier for the model (35.7% EM) than bridge questions requiring multi-hop reasoning (24.4% EM).
+- **SP Recall 76%** — the hybrid retriever successfully surfaces at least one gold supporting article in 76% of cases, confirming the BM25-first fusion strategy is effective for named-entity coverage.
+- **SP Precision 17.4%** — expected to be low: we retrieve 10 passages but typically only 2 are gold supporting facts. Precision = 2/10 = 20% is the theoretical ceiling; 17.4% is close to optimal.
+
+---
+
 ## Project Structure
 
 ```
@@ -343,17 +395,19 @@ Final Answer: no
 │   ├── data/
 │   │   ├── build_hotpotqa_db.py   # Download + chunk + embed → ChromaDB
 │   │   └── build_bm25_index.py    # Build BM25Plus index from ChromaDB
-│   └── rag/
-│       ├── retriever.py           # Dense retriever (ChromaDB)
-│       ├── hybrid_retriever.py    # BM25 + dense hybrid retriever
-│       ├── pipeline.py            # RAG pipeline (prompt + streaming)
-│       ├── llm.py                 # Ollama LLM wrapper
-│       └── qa.py                  # CLI entry point
+│   ├── rag/
+│   │   ├── retriever.py           # ChromaDBRetriever + HybridRetriever
+│   │   ├── pipeline.py            # RAG pipeline (prompt + streaming)
+│   │   ├── llm.py                 # Ollama LLM wrapper
+│   │   └── qa.py                  # CLI entry point
+│   └── eval/
+│       └── evaluate.py            # Benchmark evaluation (EM, F1, SP metrics)
 ├── data/
 │   ├── chromadb/                  # ChromaDB vector store (auto-created)
 │   ├── hotpotqa/                  # Raw dataset cache (auto-created)
 │   ├── bm25_index.pkl             # BM25Plus index (auto-created)
 │   └── bm25_corpus_ids.pkl        # Corpus ID mapping (auto-created)
+├── results/                       # Evaluation outputs (JSONL + CSV)
 ├── hotpotqa_analysis.ipynb        # Data exploration notebook
 ├── Dockerfile
 ├── docker-compose.yml
