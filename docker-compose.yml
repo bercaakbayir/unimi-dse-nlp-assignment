@@ -12,6 +12,20 @@ services:
       - TRANSFORMERS_CACHE=/app/data/.cache/transformers
     command: ["python", "src/data/build_hotpotqa_db.py"]
 
+  # ── Benchmark evaluation ────────────────────────────────────────────────────
+  eval:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      - ./data:/app/data
+      - ./results:/app/results
+    environment:
+      - HF_HOME=/app/data/.cache/huggingface
+      - TRANSFORMERS_CACHE=/app/data/.cache/transformers
+      - OLLAMA_HOST=http://host.docker.internal:11434
+    command: ["python", "src/eval/evaluate.py", "--output", "results/hybrid_k10.jsonl"]
+
   # ── RAG Q&A ─────────────────────────────────────────────────────────────────
   qa:
     build:
