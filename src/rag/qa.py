@@ -17,8 +17,15 @@ import argparse
 import sys
 from pathlib import Path
 
+from rich import box as rich_box
+from rich.console import Console
+from rich.panel import Panel
+from rich.text import Text
+
 # Allow running as `python src/rag/qa.py` from the project root
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+_console = Console()
 
 from src.rag.llm import OllamaLLM
 from src.rag.pipeline import RAGPipeline
@@ -94,11 +101,31 @@ def build_pipeline(args: argparse.Namespace) -> RAGPipeline:
 
 
 def print_result(result: dict) -> None:
-    print(f"\nAnswer: {result['answer']}")
-    print("\nSources:")
+    full_answer = result["answer"]
+
+    # Split reasoning from the short final answer
+    if "Final Answer:" in full_answer:
+        cot, final = full_answer.split("Final Answer:", 1)
+        cot = cot.strip()
+        final = final.strip()
+    else:
+        cot = full_answer.strip()
+        final = None
+
+    # Chain-of-Thought — yellow box
+    _console.print(Panel(cot, title="Chain-of-Thought", border_style="yellow", box=rich_box.ROUNDED))
+
+    # Retrieved Documents — orange box
+    sources = Text()
     for s in result["sources"]:
-        print(f"  [{s['score']:.3f}] {s['title']}")
-        print(f"           {s['text'][:120].strip()}...")
+        sources.append(f"[{s['score']:.3f}] ", style="bold")
+        sources.append(f"{s['title']}\n", style="bold")
+        sources.append(f"  {s['text'][:120].strip()}...\n\n")
+    _console.print(Panel(sources, title="Retrieved Documents", border_style="dark_orange", box=rich_box.ROUNDED))
+
+    # Final Answer — blue box
+    if final:
+        _console.print(Panel(Text(final, style="bold"), title="Final Answer", border_style="blue", box=rich_box.ROUNDED))
 
 
 def main() -> None:

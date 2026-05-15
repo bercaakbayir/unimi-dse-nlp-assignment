@@ -5,3 +5,4 @@ tqdm>=4.66.0
 torch
 ollama>=0.3.0
 rank_bm25>=0.2.2
+rich>=13.0.0
