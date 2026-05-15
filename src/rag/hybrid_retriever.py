@@ -80,7 +80,7 @@ class HybridRetriever:
 
     def _dense_retrieve(self, query: str, k: int) -> list[dict]:
         embedding = self._model.encode(
-            query, normalize_embeddings=True, convert_to_numpy=True
+            query, normalize_embeddings=True
         ).tolist()
         results = self._collection.query(
             query_embeddings=[embedding],

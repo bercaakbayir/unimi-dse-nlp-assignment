@@ -62,7 +62,6 @@ class ChromaDBRetriever:
         embedding = self._model.encode(
             query,
             normalize_embeddings=True,
-            convert_to_numpy=True,
         ).tolist()
 
         results = self._collection.query(
