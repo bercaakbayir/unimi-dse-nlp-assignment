@@ -47,10 +47,10 @@ _FEVER_DEV_URLS = [
     "https://s3-eu-west-1.amazonaws.com/fever.public/paper_dev.jsonl",
 ]
 
-# MediaWiki API settings
+# MediaWiki API settings — one title per request for reliability
 _WIKI_API        = "https://en.wikipedia.org/w/api.php"
-_WIKI_BATCH      = 10     # titles per request (smaller batches → lighter per-request cost)
-_WIKI_DELAY      = 1.0    # seconds between batches (polite baseline)
+_WIKI_BATCH      = 1      # one title at a time: no pipe-separator issues
+_WIKI_DELAY      = 1.0    # seconds between requests
 _WIKI_MAX_RETRY  = 5      # retries on 429 with exponential backoff
 
 
@@ -118,17 +118,27 @@ def _wiki_api_fetch(titles: list[str]) -> dict[str, str]:
     """
     Fetches plain-text extracts for a batch of Wikipedia titles.
     Returns {normalised_title: plain_text}.
+
+    The pipe | separator in the titles parameter must NOT be percent-encoded
+    (%7C) — MediaWiki only treats a literal | as a multi-value separator.
+    We therefore build the URL manually instead of using urlencode().
     """
-    params = urllib.parse.urlencode({
-        "action":           "query",
-        "titles":           "|".join(t.replace(" ", "_") for t in titles),
-        "prop":             "extracts",
-        "explaintext":      "1",
-        "exsectionformat":  "plain",
-        "format":           "json",
-        "redirects":        "1",
+    base_params = urllib.parse.urlencode({
+        "action":          "query",
+        "prop":            "extracts",
+        "explaintext":     "1",
+        "exsectionformat": "plain",
+        "exlimit":         "max",
+        "format":          "json",
+        "redirects":       "1",
     })
-    url = f"{_WIKI_API}?{params}"
+    # Keep | unencoded so MediaWiki treats each entry as a separate title
+    titles_param = urllib.parse.quote(
+        "|".join(t.replace(" ", "_") for t in titles),
+        safe="|",
+    )
+    url = f"{_WIKI_API}?{base_params}&titles={titles_param}"
+
     req = urllib.request.Request(url, headers={"User-Agent": "fever-rag-builder/1.0"})
     with urllib.request.urlopen(req, timeout=30) as resp:
         data = json.loads(resp.read().decode("utf-8"))
@@ -136,9 +146,11 @@ def _wiki_api_fetch(titles: list[str]) -> dict[str, str]:
     results: dict[str, str] = {}
     pages = data.get("query", {}).get("pages", {})
     for page in pages.values():
+        if int(page.get("pageid", -1)) < 0:   # skip "missing" pages
+            continue
         title = page.get("title", "")
         text  = page.get("extract", "")
-        if title and text:
+        if title and text.strip():
             results[title] = text
     return results
 

@@ -174,6 +174,18 @@ def _final_panel_title(mode: str) -> str:
     return "Final Verdict" if mode == "fact_check" else "Final Answer"
 
 
+def _normalize_verdict(text: str) -> str:
+    """Normalize LLM typos like REFUSES/SUPPORTED/REFUTED to canonical FEVER labels."""
+    s = text.upper().strip()
+    if "NOT ENOUGH" in s or "NEI" in s or "INSUFFICIENT" in s:
+        return "NOT ENOUGH INFO"
+    if "REFUT" in s or "REFUS" in s or "FALSE" in s or "CONTRADICT" in s:
+        return "REFUTES"
+    if "SUPPORT" in s or "TRUE" in s or "CONFIRM" in s:
+        return "SUPPORTS"
+    return text.strip()
+
+
 def print_result_stream(pipeline: RAGPipeline, question: str) -> None:
     _console.rule("[yellow]Chain-of-Thought[/yellow]", style="yellow")
 
@@ -207,6 +219,8 @@ def print_result_stream(pipeline: RAGPipeline, question: str) -> None:
 
     if marker in full_answer:
         final = full_answer.split(marker, 1)[1].strip()
+        if pipeline.mode == "fact_check":
+            final = _normalize_verdict(final)
         _console.print(Panel(Text(final, style="bold"), title=panel_title,
                              border_style="blue", box=rich_box.ROUNDED))
 
