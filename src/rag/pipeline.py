@@ -45,6 +45,36 @@ Output ONLY the sub-questions, one per line, no numbering, no preamble.\
 
 _DECOMPOSE_TMPL = "Question: {question}\nSub-questions:"
 
+_FEVER_SYSTEM_PROMPT = """\
+You are a precise fact-checking assistant.
+Verify the claim using ONLY the provided context passages.
+Think step by step, then give your Final Verdict using exactly one of:
+  Final Verdict: SUPPORTS
+  Final Verdict: REFUTES
+  Final Verdict: NOT ENOUGH INFO
+
+Rules:
+- SUPPORTS      → the context clearly confirms the claim is true
+- REFUTES       → the context clearly contradicts the claim
+- NOT ENOUGH INFO → the context is insufficient to confirm or refute
+
+Few-shot examples (format only — not from your data):
+
+Claim: Albert Einstein was born in Germany.
+Reasoning: The context states Einstein was born in Ulm, in the Kingdom of Württemberg in the German Empire.
+Final Verdict: SUPPORTS
+
+Claim: The Eiffel Tower is located in London.
+Reasoning: The context states the Eiffel Tower is a wrought-iron lattice tower on the Champ de Mars in Paris, France.
+Final Verdict: REFUTES
+
+Claim: Marie Curie won three Nobel Prizes.
+Reasoning: The context mentions she won the Nobel Prize in Physics (1903) and Nobel Prize in Chemistry (1911), but does not mention a third prize.
+Final Verdict: NOT ENOUGH INFO
+
+If the context contains no relevant information, output: Final Verdict: NOT ENOUGH INFO\
+"""
+
 
 class RAGPipeline:
     def __init__(
@@ -54,12 +84,14 @@ class RAGPipeline:
         top_k: int = 10,
         use_multi_query: bool = False,
         poisoner=None,
+        mode: str = "qa",
     ) -> None:
         self.retriever = retriever
         self.llm = llm
         self.top_k = top_k
         self.use_multi_query = use_multi_query
         self.poisoner = poisoner
+        self.mode = mode  # "qa" or "fact_check"
 
     def _retrieve(self, question: str, k: int) -> list[dict]:
         if self.use_multi_query:
@@ -84,8 +116,13 @@ class RAGPipeline:
     def answer(self, question: str, k: int | None = None) -> dict:
         k = k or self.top_k
         passages = self._retrieve(question, k)
-        prompt = self._build_prompt(question, passages)
-        answer = self.llm.generate(prompt, system=_SYSTEM_PROMPT)
+        if self.mode == "fact_check":
+            prompt = self._build_fever_prompt(question, passages)
+            system = _FEVER_SYSTEM_PROMPT
+        else:
+            prompt = self._build_prompt(question, passages)
+            system = _SYSTEM_PROMPT
+        answer = self.llm.generate(prompt, system=system)
         return {
             "question": question,
             "answer":   answer,
@@ -97,10 +134,15 @@ class RAGPipeline:
         k = k or self.top_k
         passages = self._retrieve(question, k)
 
-        prompt = self._build_prompt(question, passages)
+        if self.mode == "fact_check":
+            prompt = self._build_fever_prompt(question, passages)
+            system = _FEVER_SYSTEM_PROMPT
+        else:
+            prompt = self._build_prompt(question, passages)
+            system = _SYSTEM_PROMPT
         full_answer = ""
 
-        for token in self.llm.generate_stream(prompt, system=_SYSTEM_PROMPT):
+        for token in self.llm.generate_stream(prompt, system=system):
             full_answer += token
             yield "token", token
 
@@ -167,4 +209,18 @@ class RAGPipeline:
             f"End with 'Final Answer:' followed by the shortest correct answer "
             f"(yes/no, a year/date range, or a brief phrase).\n"
             f"Answer:"
+        )
+
+    def _build_fever_prompt(self, claim: str, passages: list[dict]) -> str:
+        context = "\n\n".join(
+            f"[{i}] {p['title']}\n{p['text']}"
+            for i, p in enumerate(passages, 1)
+        )
+        return (
+            f"Context:\n{context}\n\n"
+            f"Claim: {claim}\n"
+            f"Think step by step using only the context above. "
+            f"End with exactly one of: 'Final Verdict: SUPPORTS', "
+            f"'Final Verdict: REFUTES', or 'Final Verdict: NOT ENOUGH INFO'.\n"
+            f"Verdict:"
         )

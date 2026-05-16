@@ -1,15 +1,19 @@
 """
-qa.py — Interactive RAG Q&A over HotpotQA
+qa.py — Interactive RAG Q&A (HotpotQA) and Fact-Checking (FEVER)
 
 Usage:
-    # Interactive mode
-    python src/rag/qa.py
+    # Interactive mode — HotpotQA (default)
+    python src/rag/qa.py --hotpotqa
 
-    # Single question
-    python src/rag/qa.py -q "Who directed Inception?"
+    # Interactive mode — FEVER fact-checking
+    python src/rag/qa.py --fever
+
+    # Single question / claim
+    python src/rag/qa.py --hotpotqa -q "Who directed Inception?"
+    python src/rag/qa.py --fever -q "Nikolaj Coster-Waldau worked with Fox Broadcasting Company."
 
     # Custom options
-    python src/rag/qa.py --llm mistral --top-k 7 --collection hotpotqa_passages
+    python src/rag/qa.py --llm mistral --top-k 7
     python src/rag/qa.py --retriever dense --no-multi-query
 """
 
@@ -33,15 +37,40 @@ from src.rag.retriever import ChromaDBRetriever
 
 ROOT            = Path(__file__).resolve().parents[2]
 CHROMA_DIR      = ROOT / "data" / "chromadb"
-BM25_PATH       = ROOT / "data" / "bm25_index.pkl"
-CORPUS_IDS_PATH = ROOT / "data" / "bm25_corpus_ids.pkl"
+
+# Per-dataset defaults
+_DATASET_DEFAULTS = {
+    "hotpotqa": {
+        "collection":    "hotpotqa_passages",
+        "bm25_path":     ROOT / "data" / "bm25_index.pkl",
+        "corpus_ids":    ROOT / "data" / "bm25_corpus_ids.pkl",
+        "mode":          "qa",
+    },
+    "fever": {
+        "collection":    "fever_passages",
+        "bm25_path":     ROOT / "data" / "fever_bm25_index.pkl",
+        "corpus_ids":    ROOT / "data" / "fever_bm25_corpus_ids.pkl",
+        "mode":          "fact_check",
+    },
+}
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="RAG Q&A over HotpotQA")
+    parser = argparse.ArgumentParser(description="RAG Q&A (HotpotQA) and Fact-Checking (FEVER)")
+
+    dataset_group = parser.add_mutually_exclusive_group()
+    dataset_group.add_argument(
+        "--hotpotqa", action="store_true",
+        help="Use HotpotQA dataset / QA mode (default)",
+    )
+    dataset_group.add_argument(
+        "--fever", action="store_true",
+        help="Use FEVER dataset / fact-checking mode",
+    )
+
     parser.add_argument(
-        "--collection", default="hotpotqa_passages",
-        help="ChromaDB collection name (default: hotpotqa_passages)",
+        "--collection", default=None,
+        help="ChromaDB collection name (overrides dataset default)",
     )
     parser.add_argument(
         "--embed-model", default="sentence-transformers/all-MiniLM-L12-v2",
@@ -65,7 +94,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--question", "-q", default=None,
-        help="Single question — skips interactive loop",
+        help="Single question or claim — skips interactive loop",
     )
     parser.add_argument(
         "--poison", type=lambda x: x.lower() == "true", default=False,
@@ -75,24 +104,43 @@ def parse_args() -> argparse.Namespace:
         "--poison-seed", type=int, default=None,
         help="Random seed for poison passage selection (default: non-deterministic)",
     )
-    return parser.parse_args()
+    args = parser.parse_args()
+
+    # Resolve dataset-specific defaults (fever if --fever, otherwise hotpotqa)
+    dataset_key = "fever" if args.fever else "hotpotqa"
+    defaults = _DATASET_DEFAULTS[dataset_key]
+    args._dataset = dataset_key
+    args._mode = defaults["mode"]
+    args._bm25_path = defaults["bm25_path"]
+    args._corpus_ids_path = defaults["corpus_ids"]
+    if args.collection is None:
+        args.collection = defaults["collection"]
+
+    return args
 
 
 def build_pipeline(args: argparse.Namespace) -> RAGPipeline:
-    if args.retriever == "hybrid" and BM25_PATH.exists():
+    bm25_path = args._bm25_path
+    corpus_ids_path = args._corpus_ids_path
+
+    if args.retriever == "hybrid" and bm25_path.exists():
         from src.rag.retriever import HybridRetriever
         retriever = HybridRetriever(
             chroma_dir=CHROMA_DIR,
             collection_name=args.collection,
             model_name=args.embed_model,
             top_k=args.top_k,
-            bm25_path=BM25_PATH,
-            corpus_ids_path=CORPUS_IDS_PATH,
+            bm25_path=bm25_path,
+            corpus_ids_path=corpus_ids_path,
         )
     else:
         if args.retriever == "hybrid":
             print("Warning: BM25 index not found — falling back to dense retrieval.")
-            print("Run: python src/data/build_bm25_index.py")
+            if args._dataset == "fever":
+                print("Run: python src/data/build_bm25_index.py --collection fever_passages "
+                      "--output data/fever_bm25_index.pkl --corpus-ids-output data/fever_bm25_corpus_ids.pkl")
+            else:
+                print("Run: python src/data/build_bm25_index.py")
         retriever = ChromaDBRetriever(
             chroma_dir=CHROMA_DIR,
             collection_name=args.collection,
@@ -110,11 +158,20 @@ def build_pipeline(args: argparse.Namespace) -> RAGPipeline:
         top_k=args.top_k,
         use_multi_query=args.multi_query,
         poisoner=poisoner,
+        mode=args._mode,
     )
     _console.print("[dim]Warming up model…[/dim]", end="\r")
     pipeline.llm.generate("hi")
     _console.print(" " * 30, end="\r")
     return pipeline
+
+
+def _final_marker(mode: str) -> str:
+    return "Final Verdict:" if mode == "fact_check" else "Final Answer:"
+
+
+def _final_panel_title(mode: str) -> str:
+    return "Final Verdict" if mode == "fact_check" else "Final Answer"
 
 
 def print_result_stream(pipeline: RAGPipeline, question: str) -> None:
@@ -133,6 +190,8 @@ def print_result_stream(pipeline: RAGPipeline, question: str) -> None:
         return
 
     full_answer = full_result["answer"]
+    marker = _final_marker(pipeline.mode)
+    panel_title = _final_panel_title(pipeline.mode)
 
     sources = Text()
     for s in full_result["sources"]:
@@ -146,28 +205,27 @@ def print_result_stream(pipeline: RAGPipeline, question: str) -> None:
     _console.print(Panel(sources, title="Retrieved Documents",
                          border_style="dark_orange", box=rich_box.ROUNDED))
 
-    if "Final Answer:" in full_answer:
-        final = full_answer.split("Final Answer:", 1)[1].strip()
-        _console.print(Panel(Text(final, style="bold"), title="Final Answer",
+    if marker in full_answer:
+        final = full_answer.split(marker, 1)[1].strip()
+        _console.print(Panel(Text(final, style="bold"), title=panel_title,
                              border_style="blue", box=rich_box.ROUNDED))
 
 
-def print_result(result: dict) -> None:
+def print_result(result: dict, mode: str = "qa") -> None:
     full_answer = result["answer"]
+    marker = _final_marker(mode)
+    panel_title = _final_panel_title(mode)
 
-    # Split reasoning from the short final answer
-    if "Final Answer:" in full_answer:
-        cot, final = full_answer.split("Final Answer:", 1)
+    if marker in full_answer:
+        cot, final = full_answer.split(marker, 1)
         cot = cot.strip()
         final = final.strip()
     else:
         cot = full_answer.strip()
         final = None
 
-    # Chain-of-Thought — yellow box
     _console.print(Panel(cot, title="Chain-of-Thought", border_style="yellow", box=rich_box.ROUNDED))
 
-    # Retrieved Documents — orange box
     sources = Text()
     for s in result["sources"]:
         sources.append(f"[{s['score']:.3f}] ", style="bold")
@@ -175,9 +233,8 @@ def print_result(result: dict) -> None:
         sources.append(f"  {s['text'][:120].strip()}...\n\n")
     _console.print(Panel(sources, title="Retrieved Documents", border_style="dark_orange", box=rich_box.ROUNDED))
 
-    # Final Answer — blue box
     if final:
-        _console.print(Panel(Text(final, style="bold"), title="Final Answer", border_style="blue", box=rich_box.ROUNDED))
+        _console.print(Panel(Text(final, style="bold"), title=panel_title, border_style="blue", box=rich_box.ROUNDED))
 
 
 def main() -> None:
@@ -188,10 +245,17 @@ def main() -> None:
         print_result_stream(pipeline, args.question)
         return
 
-    print("RAG Q&A — HotpotQA  |  type 'quit' to exit\n")
+    if args._mode == "fact_check":
+        banner = "RAG Fact-Checking — FEVER  |  type 'quit' to exit\n"
+        prompt_label = "Claim: "
+    else:
+        banner = "RAG Q&A — HotpotQA  |  type 'quit' to exit\n"
+        prompt_label = "Question: "
+
+    print(banner)
     while True:
         try:
-            question = input("Question: ").strip()
+            question = input(prompt_label).strip()
         except (EOFError, KeyboardInterrupt):
             break
         if not question:
