@@ -175,16 +175,19 @@ def _wiki_api_fetch_with_retry(titles: list[str]) -> dict[str, str]:
 def load_fever_corpus(data_dir: Path, claims: list[dict]) -> list[dict]:
     """
     Collects unique evidence Wikipedia titles from claims, then fetches
-    each page's plain text from the MediaWiki API in batches.
-    Caches to data_dir/wiki_pages.jsonl.
+    each page's plain text from the MediaWiki API one title at a time.
+    Writes incrementally to data_dir/wiki_pages.jsonl so Ctrl-C is safe —
+    re-running resumes from where it left off.
     """
     cache_file = data_dir / "wiki_pages.jsonl"
 
+    # Load already-fetched titles so we can resume after an interruption
+    already_fetched: dict[str, bool] = {}
     if cache_file.exists():
-        log.info("FEVER wiki pages already downloaded — loading from cache")
-        pages = [json.loads(l) for l in cache_file.read_text().splitlines() if l.strip()]
-        log.info(f"Loaded {len(pages):,} wiki pages from cache")
-        return pages
+        existing = [json.loads(l) for l in cache_file.read_text().splitlines() if l.strip()]
+        already_fetched = {p["title"] for p in existing}
+        if len(existing) > 0:
+            log.info(f"Resuming — {len(existing):,} pages already in cache")
 
     # Collect unique evidence titles; decode FEVER's -LRB-/-RRB- encoding
     evidence_titles: set[str] = set()
@@ -196,36 +199,39 @@ def load_fever_corpus(data_dir: Path, claims: list[dict]) -> list[dict]:
                     evidence_titles.add(decoded)
 
     log.info(f"Found {len(evidence_titles):,} unique evidence Wikipedia titles")
-    log.info("Fetching pages from Wikipedia API (this may take a few minutes)...")
 
     title_list = sorted(evidence_titles)
-    pages: list[dict] = []
+    pending = [t for t in title_list if t not in already_fetched]
+
+    if not pending:
+        log.info("All pages already fetched — loading from cache")
+        return [json.loads(l) for l in cache_file.read_text().splitlines() if l.strip()]
+
+    log.info(f"Fetching {len(pending):,} remaining pages from Wikipedia API...")
     failed: list[str] = []
 
     from tqdm import tqdm
-    batches = [title_list[i:i+_WIKI_BATCH] for i in range(0, len(title_list), _WIKI_BATCH)]
-    for batch in tqdm(batches, desc="Fetching wiki pages"):
-        try:
-            fetched = _wiki_api_fetch_with_retry(batch)
-            for title, text in fetched.items():
-                if text.strip():
-                    pages.append({"title": title, "text": text})
-            if not fetched:
+    with cache_file.open("a", encoding="utf-8") as f:
+        batches = [pending[i:i+_WIKI_BATCH] for i in range(0, len(pending), _WIKI_BATCH)]
+        for batch in tqdm(batches, desc="Fetching wiki pages"):
+            try:
+                fetched = _wiki_api_fetch_with_retry(batch)
+                for title, text in fetched.items():
+                    if text.strip():
+                        f.write(json.dumps({"title": title, "text": text}) + "\n")
+                        f.flush()
+                if not fetched:
+                    failed.extend(batch)
+            except Exception as e:
+                log.warning(f"Batch fetch failed ({batch[0]}...): {e}")
                 failed.extend(batch)
-        except Exception as e:
-            log.warning(f"Batch fetch failed ({batch[0]}...): {e}")
-            failed.extend(batch)
-        time.sleep(_WIKI_DELAY)
+            time.sleep(_WIKI_DELAY)
 
     if failed:
         log.warning(f"{len(failed)} titles could not be fetched — skipped")
 
-    log.info(f"Fetched {len(pages):,} pages — saving to cache")
-    with cache_file.open("w", encoding="utf-8") as f:
-        for p in pages:
-            f.write(json.dumps(p) + "\n")
-
-    log.info(f"Saved to {cache_file}")
+    pages = [json.loads(l) for l in cache_file.read_text().splitlines() if l.strip()]
+    log.info(f"Fetched {len(pages):,} pages total — saved to {cache_file}")
     return pages
 
 
