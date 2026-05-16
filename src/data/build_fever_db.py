@@ -50,7 +50,7 @@ _FEVER_DEV_URLS = [
 # MediaWiki API settings — one title per request for reliability
 _WIKI_API        = "https://en.wikipedia.org/w/api.php"
 _WIKI_BATCH      = 1      # one title at a time: no pipe-separator issues
-_WIKI_DELAY      = 1.0    # seconds between requests
+_WIKI_DELAY      = 3.5    # seconds between requests
 _WIKI_MAX_RETRY  = 5      # retries on 429 with exponential backoff
 
 
@@ -163,7 +163,7 @@ def _wiki_api_fetch_with_retry(titles: list[str]) -> dict[str, str]:
             return _wiki_api_fetch(titles)
         except urllib.error.HTTPError as e:
             if e.code == 429:
-                wait = 2 ** attempt * 5   # 5 s, 10 s, 20 s, 40 s, 80 s
+                wait = 2 ** attempt * 10  # 10 s, 20 s, 40 s
                 log.warning(f"  429 rate-limited — waiting {wait}s before retry {attempt+1}/{_WIKI_MAX_RETRY}")
                 time.sleep(wait)
             else:
