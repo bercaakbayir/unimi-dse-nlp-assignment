@@ -35,6 +35,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from src.rag.llm import OllamaLLM
 from src.rag.pipeline import RAGPipeline
 from src.rag.retriever import ChromaDBRetriever, HybridRetriever
+from src.eval.faithfulness import faithfulness_score_fever, HALLUCINATION_THRESHOLD
 
 ROOT            = Path(__file__).resolve().parents[2]
 VALIDATION_PATH = ROOT / "data" / "fever" / "paper_dev.jsonl"
@@ -204,6 +205,7 @@ def build_pipeline(args: argparse.Namespace) -> RAGPipeline:
         top_k=args.top_k,
         poisoner=poisoner,
         mode="fact_check",
+        consistency_check=getattr(args, "consistency_check", False),
     )
 
 
@@ -229,6 +231,8 @@ def parse_args() -> argparse.Namespace:
                         help="Inject false facts into retrieved passages (default: false)")
     parser.add_argument("--poison-seed", type=int, default=None,
                         help="Random seed for poison passage selection (default: non-deterministic)")
+    parser.add_argument("--consistency-check", type=lambda x: x.lower() == "true", default=False,
+                        help="Append cross-document consistency instructions to system prompt (default: false)")
     return parser.parse_args()
 
 
@@ -299,21 +303,25 @@ def main() -> None:
                 })
                 ev_p, ev_r, ev_f = evidence_metrics(ret_titles, gold_titles)
 
+                faith = faithfulness_score_fever(pred, sample["claim"], result["sources"])
                 record.update({
-                    "gold_label":        gold,
-                    "pred_label":        pred,
-                    "pred_normalized":   normalize_label(pred),
-                    "label_acc":         label_accuracy(pred, gold),
-                    "fever_sc":          fever_score(pred, gold, ret_titles, gold_titles),
-                    "ev_precision":      ev_p,
-                    "ev_recall":         ev_r,
-                    "ev_f1":             ev_f,
-                    "retrieved_titles":  ret_titles,
-                    "gold_titles":       gold_titles,
-                    "poisoning_enabled": args.poison,
-                    "poisoned_count":    sum(1 for s in result["sources"] if s.get("poisoned")),
-                    "poisoned_titles":   [s["title"] for s in result["sources"] if s.get("poisoned")],
-                    "error":             None,
+                    "gold_label":               gold,
+                    "pred_label":               pred,
+                    "pred_normalized":          normalize_label(pred),
+                    "label_acc":                label_accuracy(pred, gold),
+                    "fever_sc":                 fever_score(pred, gold, ret_titles, gold_titles),
+                    "ev_precision":             ev_p,
+                    "ev_recall":                ev_r,
+                    "ev_f1":                    ev_f,
+                    "retrieved_titles":         ret_titles,
+                    "gold_titles":              gold_titles,
+                    "poisoning_enabled":        args.poison,
+                    "poisoned_count":           sum(1 for s in result["sources"] if s.get("poisoned")),
+                    "poisoned_titles":          [s["title"] for s in result["sources"] if s.get("poisoned")],
+                    "faithfulness_score":       faith,
+                    "is_hallucination":         faith < HALLUCINATION_THRESHOLD,
+                    "consistency_check_enabled": args.consistency_check,
+                    "error":                    None,
                 })
             except Exception as e:
                 record.update({"error": str(e), "gold_label": sample["label"]})

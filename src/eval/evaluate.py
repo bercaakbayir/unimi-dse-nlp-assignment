@@ -31,6 +31,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from src.rag.llm import OllamaLLM
 from src.rag.pipeline import RAGPipeline
 from src.rag.retriever import ChromaDBRetriever, HybridRetriever
+from src.eval.faithfulness import faithfulness_score_qa, HALLUCINATION_THRESHOLD
 
 ROOT            = Path(__file__).resolve().parents[2]
 VALIDATION_PATH = ROOT / "data" / "hotpotqa" / "validation.jsonl"
@@ -168,7 +169,10 @@ def build_pipeline(args: argparse.Namespace) -> RAGPipeline:
     if args.poison:
         from src.rag.poisoner import PassagePoisoner
         poisoner = PassagePoisoner(llm=llm, rate=0.3, seed=args.poison_seed)
-    return RAGPipeline(retriever=retriever, llm=llm, top_k=args.top_k, poisoner=poisoner)
+    return RAGPipeline(
+        retriever=retriever, llm=llm, top_k=args.top_k, poisoner=poisoner,
+        consistency_check=getattr(args, "consistency_check", False),
+    )
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -193,6 +197,8 @@ def parse_args() -> argparse.Namespace:
                         help="Inject false facts into retrieved passages (default: false)")
     parser.add_argument("--poison-seed", type=int, default=None,
                         help="Random seed for poison passage selection (default: non-deterministic)")
+    parser.add_argument("--consistency-check", type=lambda x: x.lower() == "true", default=False,
+                        help="Append cross-document consistency instructions to system prompt (default: false)")
     return parser.parse_args()
 
 
@@ -258,20 +264,24 @@ def main() -> None:
                 gold_titles = list(set(sample["supporting_facts"]["title"]))
                 sp_p, sp_r, sp_f = sp_metrics(ret_titles, gold_titles)
 
+                faith = faithfulness_score_qa(pred, result["sources"])
                 record.update({
-                    "gold_answer":       gold,
-                    "pred_answer":       pred,
-                    "em":                exact_match(pred, gold),
-                    "f1":                token_f1(pred, gold),
-                    "sp_precision":      sp_p,
-                    "sp_recall":         sp_r,
-                    "sp_f1":             sp_f,
-                    "retrieved_titles":  ret_titles,
-                    "gold_titles":       gold_titles,
-                    "poisoning_enabled": args.poison,
-                    "poisoned_count":    sum(1 for s in result["sources"] if s.get("poisoned")),
-                    "poisoned_titles":   [s["title"] for s in result["sources"] if s.get("poisoned")],
-                    "error":             None,
+                    "gold_answer":              gold,
+                    "pred_answer":              pred,
+                    "em":                       exact_match(pred, gold),
+                    "f1":                       token_f1(pred, gold),
+                    "sp_precision":             sp_p,
+                    "sp_recall":                sp_r,
+                    "sp_f1":                    sp_f,
+                    "retrieved_titles":         ret_titles,
+                    "gold_titles":              gold_titles,
+                    "poisoning_enabled":        args.poison,
+                    "poisoned_count":           sum(1 for s in result["sources"] if s.get("poisoned")),
+                    "poisoned_titles":          [s["title"] for s in result["sources"] if s.get("poisoned")],
+                    "faithfulness_score":       faith,
+                    "is_hallucination":         faith < HALLUCINATION_THRESHOLD,
+                    "consistency_check_enabled": args.consistency_check,
+                    "error":                    None,
                 })
             except Exception as e:
                 record.update({"error": str(e), "gold_answer": sample["answer"]})
