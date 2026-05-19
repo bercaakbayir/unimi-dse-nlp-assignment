@@ -57,7 +57,7 @@ def normalize_label(label: str) -> str:
     s = label.upper().strip()
     if "NOT ENOUGH" in s or "NEI" in s or "INSUFFICIENT" in s:
         return _LABEL_NEI
-    if "REFUT" in s or "FALSE" in s or "CONTRADICT" in s:
+    if "REFUT" in s or "REFUS" in s or "FALSE" in s or "CONTRADICT" in s:
         return _LABEL_REFUTES
     if "SUPPORT" in s or "TRUE" in s or "CONFIRM" in s:
         return _LABEL_SUPPORTS
