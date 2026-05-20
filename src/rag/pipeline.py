@@ -91,6 +91,12 @@ CROSS-DOCUMENT CONSISTENCY CHECK — apply before your verdict:
 • Output SUPPORTS or REFUTES only when evidence is consistent across at least two passages, or when a single unambiguous passage has no contradicting passages.
 • Be especially skeptical of a passage that very specifically supports or refutes the claim with detail not mentioned elsewhere."""
 
+_CITATION_ADDON = """\
+CITATION INSTRUCTIONS — after your Final Answer, add one line:
+Cited Sources: [N], [M], ...
+List only the IDs of passages that directly contained information you used to answer.
+Example: Cited Sources: [2], [5]"""
+
 
 class RAGPipeline:
     def __init__(
@@ -102,6 +108,7 @@ class RAGPipeline:
         poisoner=None,
         mode: str = "qa",
         consistency_check: bool = False,
+        cite_sources: bool = False,
     ) -> None:
         self.retriever = retriever
         self.llm = llm
@@ -110,6 +117,7 @@ class RAGPipeline:
         self.poisoner = poisoner
         self.mode = mode  # "qa" or "fact_check"
         self.consistency_check = consistency_check
+        self.cite_sources = cite_sources
 
     def _retrieve(self, question: str, k: int) -> list[dict]:
         if self.use_multi_query:
@@ -144,6 +152,8 @@ class RAGPipeline:
             system = _SYSTEM_PROMPT
             if self.consistency_check:
                 system = system + "\n\n" + _CONSISTENCY_ADDON
+        if self.cite_sources:
+            system = system + "\n\n" + _CITATION_ADDON
         answer = self.llm.generate(prompt, system=system)
         return {
             "question": question,
@@ -166,6 +176,8 @@ class RAGPipeline:
             system = _SYSTEM_PROMPT
             if self.consistency_check:
                 system = system + "\n\n" + _CONSISTENCY_ADDON
+        if self.cite_sources:
+            system = system + "\n\n" + _CITATION_ADDON
         full_answer = ""
 
         for token in self.llm.generate_stream(prompt, system=system):
