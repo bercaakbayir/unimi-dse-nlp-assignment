@@ -3,9 +3,7 @@ Trust metrics for HotpotQA RAG evaluation.
 
 Robustness     — F1 degradation (clean → poisoned)
 Transparency   — NLI precision of gold key-facts covered in model reasoning
-Accountability — Citation F1: cited passage IDs vs gold relevant IDs
 """
-import re
 import numpy as np
 
 _MAX_REASONING_CHARS = 1500
@@ -67,33 +65,3 @@ def transparency_score(full_output: str, key_facts: list[str]) -> float:
         return 0.0
     entailed = [_entailment_prob(reasoning, f) >= ENTAILMENT_THRESHOLD for f in key_facts]
     return sum(entailed) / len(entailed)
-
-
-# ── Accountability ─────────────────────────────────────────────────────────────
-
-def extract_cited_ids(full_output: str) -> list[int]:
-    """
-    Parse 'Cited Sources: [1], [3]' from LLM output.
-    Returns empty list if the citation line is absent.
-    """
-    match = re.search(r"Cited Sources:\s*([\d,\s\[\]]+)", full_output, re.IGNORECASE)
-    if not match:
-        return []
-    return [int(x) for x in re.findall(r"\d+", match.group(1))]
-
-
-def gold_citation_ids(retrieved_titles: list[str], gold_titles: list[str]) -> list[int]:
-    """1-indexed positions of retrieved passages whose title is in gold_titles."""
-    gold_set = set(gold_titles)
-    return [i + 1 for i, t in enumerate(retrieved_titles) if t in gold_set]
-
-
-def accountability_f1(cited: list[int], gold: list[int]) -> tuple[float, float, float]:
-    """Citation precision, recall, F1."""
-    p_set, g_set = set(cited), set(gold)
-    if not p_set or not g_set:
-        return 0.0, 0.0, 0.0
-    p  = len(p_set & g_set) / len(p_set)
-    r  = len(p_set & g_set) / len(g_set)
-    f1 = 2 * p * r / (p + r) if (p + r) else 0.0
-    return p, r, f1

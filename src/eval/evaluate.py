@@ -40,7 +40,6 @@ from src.eval.faithfulness import (
 )
 from src.eval.trust_metrics import (
     extract_key_facts, transparency_score,
-    extract_cited_ids, gold_citation_ids, accountability_f1,
 )
 
 ROOT        = Path(__file__).resolve().parents[2]
@@ -350,7 +349,6 @@ def build_pipeline(args: argparse.Namespace) -> RAGPipeline:
     return RAGPipeline(
         retriever=retriever, llm=llm, top_k=args.top_k, poisoner=poisoner,
         consistency_check=getattr(args, "consistency_check", False),
-        cite_sources=getattr(args, "cite_sources", False),
     )
 
 
@@ -413,8 +411,6 @@ def parse_args() -> argparse.Namespace:
                         help="Random seed for poison passage selection (default: non-deterministic)")
     parser.add_argument("--consistency-check", type=lambda x: x.lower() == "true", default=False,
                         help="Append cross-document consistency instructions to system prompt (default: false)")
-    parser.add_argument("--cite-sources", type=lambda x: x.lower() == "true", default=False,
-                        help="Prompt LLM to cite passage IDs; enables accountability metrics (hotpotqa only)")
     return parser.parse_args()
 
 
@@ -501,21 +497,8 @@ def _run_hotpotqa(args: argparse.Namespace, output_path: Path, timestamp: str) -
                     "key_facts":                 key_facts,
                     "n_key_facts":               len(key_facts),
                     "transparency_score":        transp,
-                    "cite_sources_enabled":      args.cite_sources,
                     "error":                     None,
                 })
-
-                if args.cite_sources:
-                    cited    = extract_cited_ids(full_output)
-                    true_ids = gold_citation_ids(ret_titles, gold_titles)
-                    acc_p, acc_r, acc_f = accountability_f1(cited, true_ids)
-                    record.update({
-                        "cited_ids":                cited,
-                        "gold_cited_ids":           true_ids,
-                        "accountability_precision": acc_p,
-                        "accountability_recall":    acc_r,
-                        "accountability_f1":        acc_f,
-                    })
             except Exception as e:
                 record.update({"error": str(e), "gold_answer": sample["answer"]})
 

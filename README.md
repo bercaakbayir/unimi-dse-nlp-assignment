@@ -258,7 +258,6 @@ The runner is **resume-safe**: if interrupted, it reads the existing JSONL outpu
 | **Faithfulness score** | `cross-encoder/nli-deberta-v3-small` NLI entailment probability that the retrieved context supports the LLM's answer. Score < 0.5 is flagged as a hallucination. Abstentions ("cannot find the answer") are always scored 1.0. |
 | **Transparency score** | Fraction of gold key-facts (from HotpotQA supporting_facts annotations) that are entailed by the model's chain-of-thought reasoning, measured with the same NLI model. |
 | **Robustness delta** | F1 percentage-point drop from the clean condition to the poisoned condition. Higher = more sensitive to poisoning. |
-| **Accountability F1** (optional) | When `--cite-sources true`, citation precision/recall/F1 comparing the passage IDs the model cited vs. the positions of gold passages in the retrieved list. |
 
 ---
 
@@ -398,7 +397,7 @@ src/
   eval/
     evaluate.py               # Unified evaluation runner for HotpotQA and FEVER
     faithfulness.py           # NLI faithfulness scorer (cross-encoder/nli-deberta-v3-small)
-    trust_metrics.py          # Robustness, transparency, accountability metrics
+    trust_metrics.py          # Robustness and transparency metrics
 notebooks/
   evaluation_pipeline.ipynb   # Runs all 6 experiments and generates comparison charts
   fever_analysis.ipynb        # FEVER dataset exploration and result analysis
